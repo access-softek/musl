@@ -45,6 +45,14 @@ static void (*error)(const char *, ...) = error_noop;
 #define container_of(p,t,m) ((t*)((char *)(p)-offsetof(t,m)))
 #define countof(a) ((sizeof (a))/(sizeof (a)[0]))
 
+#ifndef TARGET_RELOCATE
+#define TARGET_RELOCATE(...) 0
+#endif
+
+#ifndef DO_TARGET_RELR
+#define DO_TARGET_RELR(...)
+#endif
+
 struct debug {
 	int ver;
 	void *head;
@@ -549,6 +557,8 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 #endif
 			break;
 		default:
+			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend))
+				break;
 			error("Error relocating %s: unsupported relocation type %d",
 				dso->name, type);
 			if (runtime) longjmp(*rtld_fail, 1);
@@ -1419,6 +1429,9 @@ static void reloc_all(struct dso *p)
 		do_relocs(p, laddr(p, dyn[DT_RELA]), dyn[DT_RELASZ], 3);
 		if (!DL_FDPIC)
 			do_relr_relocs(p, laddr(p, dyn[DT_RELR]), dyn[DT_RELRSZ]);
+		if (p != &ldso) {
+			DO_TARGET_RELR((uint64_t)p->base, p->dynv);
+		}
 
 		if (head != &ldso && p->relro_start != p->relro_end) {
 			long ret = __syscall(SYS_mprotect, laddr(p, p->relro_start),

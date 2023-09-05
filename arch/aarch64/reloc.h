@@ -22,3 +22,14 @@
 
 #define CRTJMP(pc,sp) __asm__ __volatile__( \
 	"mov sp,%1 ; br %0" : : "r"(pc), "r"(sp) : "memory" )
+
+#ifdef MUSL_EXPERIMENTAL_PAC
+#define TARGET_RELOCATE(dso, type, reladdr, sym, addend) \
+  do_target_reloc(dso, type, reladdr, sym, addend)
+#define DO_TARGET_RELR(dso, dyn) do_pauth_relr(dso, dyn)
+
+int do_target_reloc(int type, uint64_t* reladdr, uint64_t base,
+		    uint64_t symval, uint64_t addend);
+
+void do_pauth_relr(uint64_t base, uint64_t* dyn);
+#endif
