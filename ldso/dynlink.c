@@ -119,6 +119,7 @@ struct dso {
 		size_t *got;
 	} *funcdescs;
 	size_t *got;
+	size_t* pauth;
 	char buf[];
 };
 
@@ -707,6 +708,7 @@ static void *map_library(int fd, struct dso *dso)
 	unsigned char *map=MAP_FAILED, *base;
 	size_t dyn=0;
 	size_t tls_image=0;
+	size_t notes[8] = {};
 	size_t i;
 
 	ssize_t l = read(fd, buf, sizeof buf);
@@ -746,6 +748,13 @@ static void *map_library(int fd, struct dso *dso)
 				__default_stacksize =
 					ph->p_memsz < DEFAULT_STACK_MAX ?
 					ph->p_memsz : DEFAULT_STACK_MAX;
+			}
+		} else if (ph->p_type == PT_NOTE && ph->p_memsz >= 32) {
+			for (unsigned in = 0; in < sizeof(notes)/sizeof(notes[0]); ++in) {
+				if (notes[in] == 0) {
+					notes[in] = ph->p_vaddr;
+					break;
+				}
 			}
 		}
 		if (ph->p_type != PT_LOAD) continue;
@@ -868,6 +877,13 @@ done_mapping:
 	dso->base = base;
 	dso->dynv = laddr(dso, dyn);
 	if (dso->tls.size) dso->tls.image = laddr(dso, tls_image);
+	for (unsigned in = 0; in < sizeof(notes)/sizeof(notes[0]) && notes[in]; ++in) {
+		uint32_t* pnote = laddr(dso, notes[in]);
+		if (pnote[2] == NT_GNU_ABI_TAG && !strncmp((char*)&pnote[3], "ARM", 4)) {
+			dso->pauth = (size_t*)&pnote[4];
+			break;
+		}
+	}
 	free(allocated_buf);
 	return map;
 noexec:
@@ -1060,6 +1076,16 @@ static void makefuncdescs(struct dso *p)
 	}
 }
 
+static int check_pauth_abi_compatible(struct dso* first, struct dso* second)
+{
+	if (first->pauth == second->pauth)
+		return 1;
+	if (first->pauth == 0 || second->pauth == 0)
+		return 0;
+	return first->pauth[0] == second->pauth[0] &&
+			first->pauth[1] == second->pauth[1];
+}
+
 static struct dso *load_library(const char *name, struct dso *needed_by)
 {
 	char buf[2*NAME_MAX+2];
@@ -1191,6 +1217,11 @@ static struct dso *load_library(const char *name, struct dso *needed_by)
 	map = noload ? 0 : map_library(fd, &temp_dso);
 	close(fd);
 	if (!map) return 0;
+
+	if (!check_pauth_abi_compatible(head, &temp_dso)) {
+		dprintf(2, "incompatible PAuth ABI between %s and %s\n", head->name, name);
+		return 0;
+	}
 
 	/* Avoid the danger of getting two versions of libc mapped into the
 	 * same process when an absolute pathname was used. The symbols
