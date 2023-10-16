@@ -19,6 +19,9 @@
 #include <dlfcn.h>
 #include <semaphore.h>
 #include <sys/membarrier.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#endif
 #include "pthread_impl.h"
 #include "fork_impl.h"
 #include "dynlink.h"
@@ -1529,7 +1532,18 @@ void __libc_exit_fini()
 		if (dyn[0] & (1<<DT_FINI_ARRAY)) {
 			size_t n = dyn[DT_FINI_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = (size_t *)laddr(p, dyn[DT_FINI_ARRAY])+n;
+#if __has_feature(ptrauth_calls)
+			while (n--) {
+				void (*fsigned)() =
+					ptrauth_sign_unauthenticated(
+						(void*)*(--fn),
+						0 /* IA key */,
+						0 /* discriminator */);
+				fsigned();
+			}
+#else
 			while (n--) ((void (*)(void))*--fn)();
+#endif
 		}
 #ifndef NO_LEGACY_INITFINI
 		if ((dyn[0] & (1<<DT_FINI)) && dyn[DT_FINI])
@@ -1647,7 +1661,18 @@ static void do_init_fini(struct dso **queue)
 		if (dyn[0] & (1<<DT_INIT_ARRAY)) {
 			size_t n = dyn[DT_INIT_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = laddr(p, dyn[DT_INIT_ARRAY]);
+#if __has_feature(ptrauth_calls)
+			while (n--) {
+				void (*fsigned)() =
+					ptrauth_sign_unauthenticated(
+						(void*)*fn++,
+						0 /* IA key */,
+						0 /* discriminator */);
+				fsigned();
+			}
+#else
 			while (n--) ((void (*)(void))*fn++)();
+#endif
 		}
 
 		pthread_mutex_lock(&init_fini_lock);
@@ -1805,8 +1830,22 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	 * symbolically as a barrier against moving the address
 	 * load across the above relocation processing. */
 	struct symdef dls2b_def = find_sym(&ldso, "__dls2b", 0);
-	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls2b_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
+	if (DL_FDPIC) {
+		((stage3_func)&ldso.funcdescs[dls2b_def.sym-ldso.syms])(sp, auxv);
+	} else {
+#if __has_feature(ptrauth_calls)
+		/* FIXME: is it a proper way to call the next stage?
+		 * Can we obtain a signed address another way? */
+		void *funsigned = laddr(&ldso, dls2b_def.sym->st_value);
+		stage3_func fsigned = ptrauth_sign_unauthenticated(
+			funsigned,
+			0 /* IA key */,
+			0 /* discriminator */);
+		fsigned(sp, auxv);
+#else
+		((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
+#endif
+	}
 }
 
 /* Stage 2b sets up a valid thread pointer, which requires relocations
@@ -1829,8 +1868,22 @@ void __dls2b(size_t *sp, size_t *auxv)
 	}
 
 	struct symdef dls3_def = find_sym(&ldso, "__dls3", 0);
-	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls3_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
+	if (DL_FDPIC) {
+		((stage3_func)&ldso.funcdescs[dls3_def.sym-ldso.syms])(sp, auxv);
+	} else {
+#if __has_feature(ptrauth_calls)
+		/* FIXME: is it a proper way to call the next stage?
+		 * Can we obtain a signed address another way? */
+		void *funsigned = laddr(&ldso, dls3_def.sym->st_value);
+		stage3_func fsigned = ptrauth_sign_unauthenticated(
+			funsigned,
+			0 /* IA key */,
+			0 /* discriminator */);
+		fsigned(sp, auxv);
+#else
+		((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
+#endif
+	}
 }
 
 /* Stage 3 of the dynamic linker is called with the dynamic linker/libc
