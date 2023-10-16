@@ -11,12 +11,21 @@
 #include "crt_arch.h"
 
 #ifndef GETFUNCSYM
+#if __has_feature(ptrauth_calls)
+/* FIXME: we use this workaround to get the function address without
+ * trying to authenticate it before call */
+#define GETFUNCSYM(fp, sym, got) do { \
+	hidden void sym(); \
+	*(fp) = sym; } while(0)
+#else
 #define GETFUNCSYM(fp, sym, got) do { \
 	hidden void sym(); \
 	static void (*static_func_ptr)() = sym; \
 	__asm__ __volatile__ ( "" : "+m"(static_func_ptr) : : "memory"); \
 	*(fp) = static_func_ptr; } while(0)
 #endif
+#endif
+
 
 hidden void _dlstart_c(size_t *sp, size_t *dynv)
 {
