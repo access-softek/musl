@@ -1,12 +1,21 @@
 #include <time.h>
 #include <errno.h>
 #include <stdint.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#endif
 #include "syscall.h"
 #include "atomic.h"
 
 #ifdef VDSO_CGT_SYM
 
+#if __has_feature(ptrauth_calls)
+/* FIXME: with void * type, the pointer is unsigned, which causes failure
+ * when trying to make an authenticated call to a function by its pointer */
+static int (*volatile vdso_func)(clockid_t, struct timespec *);
+#else
 static void *volatile vdso_func;
+#endif
 
 #ifdef VDSO_CGT32_SYM
 static void *volatile vdso_func_32;
@@ -46,13 +55,32 @@ static int cgt_init(clockid_t clk, struct timespec *ts)
 	if (!__vdsosym(VDSO_CGT32_VER, VDSO_CGT32_SYM)) p = 0;
 #endif
 #endif
+#if __has_feature(ptrauth_calls)
+	/* FIXME: can we obtain a signed pointer directly from __vdsosym? */
+	int (*f)(clockid_t, struct timespec *) =
+		ptrauth_sign_unauthenticated(p, 0 /* IA key */, 0 /* discr */);
+	a_cas_p(
+		&vdso_func,
+		ptrauth_sign_unauthenticated(
+			(void *)cgt_init,
+			0 /* IA key */,
+			0 /* discriminator */),
+		p);
+#else
 	int (*f)(clockid_t, struct timespec *) =
 		(int (*)(clockid_t, struct timespec *))p;
 	a_cas_p(&vdso_func, (void *)cgt_init, p);
+#endif
 	return f ? f(clk, ts) : -ENOSYS;
 }
 
+#if __has_feature(ptrauth_calls)
+/* FIXME: with void * type, the pointer is unsigned, which causes failure
+ * when trying to make an authenticated call to a function by its pointer */
+static int (*volatile vdso_func)(clockid_t, struct timespec *) = cgt_init;
+#else
 static void *volatile vdso_func = (void *)cgt_init;
+#endif
 
 #endif
 

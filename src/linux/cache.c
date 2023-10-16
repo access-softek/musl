@@ -28,8 +28,14 @@ static void *volatile vdso_func;
 static int flush_icache_init(void *start, void *end, unsigned long int flags)
 {
 	void *p = __vdsosym(VDSO_FLUSH_ICACHE_VER, VDSO_FLUSH_ICACHE_SYM);
+#if __has_feature(ptrauth_calls)
+	/* FIXME: is there another way to get signed pointer? */
+	int (*f)(void *, void *, unsigned long int) =
+		ptrauth_sign_unauthenticated(p, 0 /* IA key */, 0 /* discr */);
+#else
 	int (*f)(void *, void *, unsigned long int) =
 		(int (*)(void *, void *, unsigned long int))p;
+#endif
 	a_cas_p(&vdso_func, (void *)flush_icache_init, p);
 	return f ? f(start, end, flags) : -ENOSYS;
 }

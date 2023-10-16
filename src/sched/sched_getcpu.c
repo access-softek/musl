@@ -1,6 +1,9 @@
 #define _GNU_SOURCE
 #include <errno.h>
 #include <sched.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#endif
 #include "syscall.h"
 #include "atomic.h"
 
@@ -13,7 +16,12 @@ typedef long (*getcpu_f)(unsigned *, unsigned *, void *);
 static long getcpu_init(unsigned *cpu, unsigned *node, void *unused)
 {
 	void *p = __vdsosym(VDSO_GETCPU_VER, VDSO_GETCPU_SYM);
+#if __has_feature(ptrauth_calls)
+	/* FIXME: is there another way to get signed address? */
+	getcpu_f f = ptrauth_sign_unauthenticated(p, 0, 0);
+#else
 	getcpu_f f = (getcpu_f)p;
+#endif
 	a_cas_p(&vdso_func, (void *)getcpu_init, p);
 	return f ? f(cpu, node, unused) : -ENOSYS;
 }
