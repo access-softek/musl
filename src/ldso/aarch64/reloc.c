@@ -37,6 +37,12 @@ static uint64_t do_sign_db(uint64_t modifier, uint64_t value)
 static int do_pauth_reloc(uint64_t* reladdr, uint64_t value)
 {
 	uint64_t schema = *reladdr;
+	/* FIXME: relocation processing is called twice, and on the second time
+	 * we'll try to sign a previously signed address. Use this horrible
+	 * workaround (for rela, less significant 4 bytes are empty) unless
+	 * there is a proper fix. */
+	if ((schema & 0xFFFFFFFF) != 0)
+		return 1;
 	unsigned discrim = (schema >> 32) & 0xFFFF;
 	int addr_div = schema >> 63;
 	int key = (schema >> 60) & 0x3;
