@@ -53,6 +53,10 @@ static void (*error)(const char *, ...) = error_noop;
 #define DO_TARGET_RELR(...)
 #endif
 
+#ifndef FPTR_CAST
+#define FPTR_CAST(fty, p) ((fty)(p))
+#endif
+
 struct debug {
 	int ver;
 	void *head;
@@ -558,7 +562,7 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 #endif
 			break;
 		default:
-			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend))
+			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso))
 				break;
 			error("Error relocating %s: unsupported relocation type %d",
 				dso->name, type);
@@ -1529,7 +1533,7 @@ void __libc_exit_fini()
 		if (dyn[0] & (1<<DT_FINI_ARRAY)) {
 			size_t n = dyn[DT_FINI_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = (size_t *)laddr(p, dyn[DT_FINI_ARRAY])+n;
-			while (n--) ((void (*)(void))*--fn)();
+			while (n--) FPTR_CAST(void (*)(void), (void*)*(--fn))();
 		}
 #ifndef NO_LEGACY_INITFINI
 		if ((dyn[0] & (1<<DT_FINI)) && dyn[DT_FINI])
@@ -1647,7 +1651,7 @@ static void do_init_fini(struct dso **queue)
 		if (dyn[0] & (1<<DT_INIT_ARRAY)) {
 			size_t n = dyn[DT_INIT_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = laddr(p, dyn[DT_INIT_ARRAY]);
-			while (n--) ((void (*)(void))*fn++)();
+			while (n--) FPTR_CAST(void (*)(void), (void*)*fn++)();
 		}
 
 		pthread_mutex_lock(&init_fini_lock);
@@ -1806,7 +1810,7 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	 * load across the above relocation processing. */
 	struct symdef dls2b_def = find_sym(&ldso, "__dls2b", 0);
 	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls2b_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
+	else FPTR_CAST(stage3_func, laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 2b sets up a valid thread pointer, which requires relocations
@@ -1830,7 +1834,7 @@ void __dls2b(size_t *sp, size_t *auxv)
 
 	struct symdef dls3_def = find_sym(&ldso, "__dls3", 0);
 	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls3_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
+	else FPTR_CAST(stage3_func, laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 3 of the dynamic linker is called with the dynamic linker/libc

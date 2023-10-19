@@ -24,12 +24,20 @@
 	"mov sp,%1 ; br %0" : : "r"(pc), "r"(sp) : "memory" )
 
 #ifdef MUSL_EXPERIMENTAL_PAC
-#define TARGET_RELOCATE(dso, type, reladdr, sym, addend) \
-  do_target_reloc(dso, type, reladdr, sym, addend)
+#define TARGET_RELOCATE(dso, type, reladdr, sym, addend, is_phase_2) \
+  do_target_reloc(dso, type, reladdr, sym, addend, is_phase_2)
 #define DO_TARGET_RELR(dso, dyn) do_pauth_relr(dso, dyn)
 
 int do_target_reloc(int type, uint64_t* reladdr, uint64_t base,
-		    uint64_t symval, uint64_t addend);
+		    uint64_t symval, uint64_t addend, int is_phase_2);
 
 void do_pauth_relr(uint64_t base, uint64_t* dyn);
+
+#define GETFUNCSYM(fp, sym, got) do { \
+	hidden void sym(); \
+	*(fp) = sym; } while(0)
+
+#define FPTR_CAST(fty, p) \
+  ((fty)__builtin_ptrauth_sign_unauthenticated((void*)(p), 0, 0))
+
 #endif

@@ -62,8 +62,11 @@ static int do_pauth_reloc(uint64_t* reladdr, uint64_t value)
 }
 
 int do_target_reloc(int type, uint64_t* reladdr, uint64_t base,
-					uint64_t symval, uint64_t addend)
+					uint64_t symval, uint64_t addend, int is_phase_2)
 {
+	// We don't process auth relocs until we load all dependencies
+	if (is_phase_2)
+		return 1;
 	switch(type)
 	{
 		case R_AARCH64_AUTH_ABS64:
