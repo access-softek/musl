@@ -36,6 +36,10 @@ static uint64_t do_sign_db(uint64_t modifier, uint64_t value)
 
 static int do_pauth_reloc(uint64_t* reladdr, uint64_t value)
 {
+	if (value == 0) {
+		*reladdr = 0;
+		return 1;
+	}
 	uint64_t schema = *reladdr;
 	unsigned discrim = (schema >> 32) & 0xFFFF;
 	int addr_div = schema >> 63;
