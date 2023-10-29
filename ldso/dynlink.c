@@ -19,6 +19,9 @@
 #include <dlfcn.h>
 #include <semaphore.h>
 #include <sys/membarrier.h>
+#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+#include <ptrauth.h>
+#endif
 #include "pthread_impl.h"
 #include "fork_impl.h"
 #include "dynlink.h"
@@ -1533,7 +1536,16 @@ void __libc_exit_fini()
 		if (dyn[0] & (1<<DT_FINI_ARRAY)) {
 			size_t n = dyn[DT_FINI_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = (size_t *)laddr(p, dyn[DT_FINI_ARRAY])+n;
+#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+			while (n--) {
+				ptrauth_auth_function(
+					(void (*)(void))*--fn,
+					ptrauth_key_asia,
+					__ptrauth_init_fini_discriminator)();
+			}
+#else
 			while (n--) FPTR_CAST(void (*)(void), (void*)*(--fn))();
+#endif
 		}
 #ifndef NO_LEGACY_INITFINI
 		if ((dyn[0] & (1<<DT_FINI)) && dyn[DT_FINI])
@@ -1651,7 +1663,16 @@ static void do_init_fini(struct dso **queue)
 		if (dyn[0] & (1<<DT_INIT_ARRAY)) {
 			size_t n = dyn[DT_INIT_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = laddr(p, dyn[DT_INIT_ARRAY]);
+#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+			while (n--) {
+				ptrauth_auth_function(
+					(void (*)(void))*fn++,
+					ptrauth_key_asia,
+					__ptrauth_init_fini_discriminator)();
+			}
+#else
 			while (n--) FPTR_CAST(void (*)(void), (void*)*fn++)();
+#endif
 		}
 
 		pthread_mutex_lock(&init_fini_lock);
