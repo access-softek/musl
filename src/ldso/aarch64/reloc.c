@@ -3,8 +3,8 @@
 #include <stdint.h>
 #include "reloc.h"
 
-#define R_AARCH64_AUTH_ABS64 0xe100
-#define R_AARCH64_AUTH_RELATIVE 0xe200
+#define R_AARCH64_AUTH_ABS64 0x410
+#define R_AARCH64_AUTH_RELATIVE 0x411
 
 #define DT_AARCH64_AUTH_RELRSZ 0x70000011
 #define DT_AARCH64_AUTH_RELR 0x70000012
