@@ -1,4 +1,4 @@
-#ifdef MUSL_EXPERIMENTAL_PAC
+#if __has_feature(ptrauth_calls)
 
 #include <stdint.h>
 #include "reloc.h"

@@ -23,7 +23,7 @@
 #define CRTJMP(pc,sp) __asm__ __volatile__( \
 	"mov sp,%1 ; br %0" : : "r"(pc), "r"(sp) : "memory" )
 
-#ifdef MUSL_EXPERIMENTAL_PAC
+#if __has_feature(ptrauth_calls)
 #define TARGET_RELOCATE(dso, type, reladdr, sym, addend, is_phase_2) \
   do_target_reloc(dso, type, reladdr, sym, addend, is_phase_2)
 #define DO_TARGET_RELR(dso, dyn) do_pauth_relr(dso, dyn)

@@ -25,7 +25,7 @@ __clone:
 	ret
 	// child
 1:	ldp x1,x0,[sp],#16
-#if MUSL_EXPERIMENTAL_PAC
+#if __has_feature(ptrauth_calls)
 	blraaz x1
 #else
 	blr x1

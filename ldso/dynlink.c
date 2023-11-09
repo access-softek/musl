@@ -19,7 +19,7 @@
 #include <dlfcn.h>
 #include <semaphore.h>
 #include <sys/membarrier.h>
-#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+#if __has_feature(ptrauth_init_fini)
 #include <ptrauth.h>
 #endif
 #include "pthread_impl.h"
@@ -1536,7 +1536,7 @@ void __libc_exit_fini()
 		if (dyn[0] & (1<<DT_FINI_ARRAY)) {
 			size_t n = dyn[DT_FINI_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = (size_t *)laddr(p, dyn[DT_FINI_ARRAY])+n;
-#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+#if __has_feature(ptrauth_init_fini)
 			while (n--) {
 				ptrauth_auth_function(
 					(void (*)(void))*--fn,
@@ -1663,7 +1663,7 @@ static void do_init_fini(struct dso **queue)
 		if (dyn[0] & (1<<DT_INIT_ARRAY)) {
 			size_t n = dyn[DT_INIT_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = laddr(p, dyn[DT_INIT_ARRAY]);
-#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+#if __has_feature(ptrauth_init_fini)
 			while (n--) {
 				ptrauth_auth_function(
 					(void (*)(void))*fn++,
