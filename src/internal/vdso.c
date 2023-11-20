@@ -5,6 +5,7 @@
 #include <string.h>
 #include "libc.h"
 #include "syscall.h"
+#include "reloc.h"
 
 #ifdef VDSO_USEFUL
 
@@ -20,6 +21,10 @@ typedef Elf64_Phdr Phdr;
 typedef Elf64_Sym Sym;
 typedef Elf64_Verdef Verdef;
 typedef Elf64_Verdaux Verdaux;
+#endif
+
+#ifndef FPTR_CAST
+#define FPTR_CAST(fty, p) ((fty)(p))
 #endif
 
 static int checkver(Verdef *def, int vsym, const char *vername, char *strings)
@@ -84,7 +89,9 @@ void *__vdsosym(const char *vername, const char *name)
 		if (strcmp(name, strings+syms[i].st_name)) continue;
 		if (versym && !checkver(verdef, versym[i], vername, strings))
 			continue;
-		return (void *)(base + syms[i].st_value);
+		return (syms[i].st_info & 0xF) == STT_FUNC ?
+				FPTR_CAST(void*, base + syms[i].st_value) :
+				(void *)(base + syms[i].st_value);
 	}
 
 	return 0;

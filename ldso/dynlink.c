@@ -19,6 +19,9 @@
 #include <dlfcn.h>
 #include <semaphore.h>
 #include <sys/membarrier.h>
+#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+#include <ptrauth.h>
+#endif
 #include "pthread_impl.h"
 #include "fork_impl.h"
 #include "dynlink.h"
@@ -44,6 +47,18 @@ static void (*error)(const char *, ...) = error_noop;
 
 #define container_of(p,t,m) ((t*)((char *)(p)-offsetof(t,m)))
 #define countof(a) ((sizeof (a))/(sizeof (a)[0]))
+
+#ifndef TARGET_RELOCATE
+#define TARGET_RELOCATE(...) 0
+#endif
+
+#ifndef DO_TARGET_RELR
+#define DO_TARGET_RELR(...)
+#endif
+
+#ifndef FPTR_CAST
+#define FPTR_CAST(fty, p) ((fty)(p))
+#endif
 
 struct debug {
 	int ver;
@@ -111,6 +126,7 @@ struct dso {
 		size_t *got;
 	} *funcdescs;
 	size_t *got;
+	size_t* pauth;
 	char buf[];
 };
 
@@ -549,6 +565,8 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 #endif
 			break;
 		default:
+			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso))
+				break;
 			error("Error relocating %s: unsupported relocation type %d",
 				dso->name, type);
 			if (runtime) longjmp(*rtld_fail, 1);
@@ -697,6 +715,7 @@ static void *map_library(int fd, struct dso *dso)
 	unsigned char *map=MAP_FAILED, *base;
 	size_t dyn=0;
 	size_t tls_image=0;
+	size_t notes[8] = {};
 	size_t i;
 
 	ssize_t l = read(fd, buf, sizeof buf);
@@ -736,6 +755,13 @@ static void *map_library(int fd, struct dso *dso)
 				__default_stacksize =
 					ph->p_memsz < DEFAULT_STACK_MAX ?
 					ph->p_memsz : DEFAULT_STACK_MAX;
+			}
+		} else if (ph->p_type == PT_NOTE && ph->p_memsz >= 32) {
+			for (unsigned in = 0; in < sizeof(notes)/sizeof(notes[0]); ++in) {
+				if (notes[in] == 0) {
+					notes[in] = ph->p_vaddr;
+					break;
+				}
 			}
 		}
 		if (ph->p_type != PT_LOAD) continue;
@@ -858,6 +884,13 @@ done_mapping:
 	dso->base = base;
 	dso->dynv = laddr(dso, dyn);
 	if (dso->tls.size) dso->tls.image = laddr(dso, tls_image);
+	for (unsigned in = 0; in < sizeof(notes)/sizeof(notes[0]) && notes[in]; ++in) {
+		uint32_t* pnote = laddr(dso, notes[in]);
+		if (pnote[2] == NT_GNU_ABI_TAG && !strncmp((char*)&pnote[3], "ARM", 4)) {
+			dso->pauth = (size_t*)&pnote[4];
+			break;
+		}
+	}
 	free(allocated_buf);
 	return map;
 noexec:
@@ -1050,6 +1083,16 @@ static void makefuncdescs(struct dso *p)
 	}
 }
 
+static int check_pauth_abi_compatible(struct dso* first, struct dso* second)
+{
+	if (first->pauth == second->pauth)
+		return 1;
+	if (first->pauth == 0 || second->pauth == 0)
+		return 0;
+	return first->pauth[0] == second->pauth[0] &&
+			first->pauth[1] == second->pauth[1];
+}
+
 static struct dso *load_library(const char *name, struct dso *needed_by)
 {
 	char buf[2*NAME_MAX+2];
@@ -1181,6 +1224,11 @@ static struct dso *load_library(const char *name, struct dso *needed_by)
 	map = noload ? 0 : map_library(fd, &temp_dso);
 	close(fd);
 	if (!map) return 0;
+
+	if (!check_pauth_abi_compatible(head, &temp_dso)) {
+		dprintf(2, "incompatible PAuth ABI between %s and %s\n", head->name, name);
+		return 0;
+	}
 
 	/* Avoid the danger of getting two versions of libc mapped into the
 	 * same process when an absolute pathname was used. The symbols
@@ -1419,6 +1467,9 @@ static void reloc_all(struct dso *p)
 		do_relocs(p, laddr(p, dyn[DT_RELA]), dyn[DT_RELASZ], 3);
 		if (!DL_FDPIC)
 			do_relr_relocs(p, laddr(p, dyn[DT_RELR]), dyn[DT_RELRSZ]);
+		if (p != &ldso) {
+			DO_TARGET_RELR((uint64_t)p->base, p->dynv);
+		}
 
 		if (head != &ldso && p->relro_start != p->relro_end) {
 			long ret = __syscall(SYS_mprotect, laddr(p, p->relro_start),
@@ -1485,7 +1536,16 @@ void __libc_exit_fini()
 		if (dyn[0] & (1<<DT_FINI_ARRAY)) {
 			size_t n = dyn[DT_FINI_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = (size_t *)laddr(p, dyn[DT_FINI_ARRAY])+n;
-			while (n--) ((void (*)(void))*--fn)();
+#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+			while (n--) {
+				ptrauth_auth_function(
+					(void (*)(void))*--fn,
+					ptrauth_key_asia,
+					__ptrauth_init_fini_discriminator)();
+			}
+#else
+			while (n--) FPTR_CAST(void (*)(void), (void*)*(--fn))();
+#endif
 		}
 #ifndef NO_LEGACY_INITFINI
 		if ((dyn[0] & (1<<DT_FINI)) && dyn[DT_FINI])
@@ -1603,7 +1663,16 @@ static void do_init_fini(struct dso **queue)
 		if (dyn[0] & (1<<DT_INIT_ARRAY)) {
 			size_t n = dyn[DT_INIT_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = laddr(p, dyn[DT_INIT_ARRAY]);
-			while (n--) ((void (*)(void))*fn++)();
+#ifdef MUSL_EXPERIMENTAL_PAC_INIT_FINI
+			while (n--) {
+				ptrauth_auth_function(
+					(void (*)(void))*fn++,
+					ptrauth_key_asia,
+					__ptrauth_init_fini_discriminator)();
+			}
+#else
+			while (n--) FPTR_CAST(void (*)(void), (void*)*fn++)();
+#endif
 		}
 
 		pthread_mutex_lock(&init_fini_lock);
@@ -1762,7 +1831,7 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	 * load across the above relocation processing. */
 	struct symdef dls2b_def = find_sym(&ldso, "__dls2b", 0);
 	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls2b_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
+	else FPTR_CAST(stage3_func, laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 2b sets up a valid thread pointer, which requires relocations
@@ -1786,7 +1855,7 @@ void __dls2b(size_t *sp, size_t *auxv)
 
 	struct symdef dls3_def = find_sym(&ldso, "__dls3", 0);
 	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls3_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
+	else FPTR_CAST(stage3_func, laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 3 of the dynamic linker is called with the dynamic linker/libc
