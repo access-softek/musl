@@ -485,6 +485,7 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 		case REL_GOT:
 		case REL_PLT:
 			*reloc_addr = sym_val + addend;
+			TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso, (uint64_t)error);
 			break;
 		case REL_USYMBOLIC:
 			memcpy(reloc_addr, &(size_t){sym_val + addend}, sizeof(size_t));
@@ -565,7 +566,7 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 #endif
 			break;
 		default:
-			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso))
+			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso, (uint64_t)error))
 				break;
 			error("Error relocating %s: unsupported relocation type %d",
 				dso->name, type);

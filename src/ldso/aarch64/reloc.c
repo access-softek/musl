@@ -4,8 +4,12 @@
 #include "reloc.h"
 
 #define R_AARCH64_AUTH_ABS64 0x244
+// Define R_AARCH64_JUMP_SLOT manually to avoid including elf.h
+#define R_AARCH64_JUMP_SLOT 0x402
 #define R_AARCH64_AUTH_RELATIVE 0x411
+#define R_AARCH64_AUTH_GLOB_DAT 0xe201
 
+#define DT_AARCH64_PAC_PLT 0x70000003
 #define DT_AARCH64_AUTH_RELRSZ 0x70000011
 #define DT_AARCH64_AUTH_RELR 0x70000012
 #define DT_AARCH64_AUTH_RELRENT 0x70000013
@@ -66,10 +70,23 @@ static int do_pauth_reloc(uint64_t* reladdr, uint64_t value)
 }
 
 int do_target_reloc(int type, uint64_t* reladdr, uint64_t base,
-					uint64_t symval, uint64_t addend, int is_phase_2)
+                    uint64_t symval, uint64_t addend, int is_phase_2, uint64_t error_sym)
 {
+	if (type == R_AARCH64_JUMP_SLOT) {
+		*reladdr = do_sign_ia((uint64_t)reladdr, *reladdr);
+		return 1;
+	}
+	if (type == R_AARCH64_AUTH_GLOB_DAT) {
+		// is_phase_2 is not applicable here
+		if ((*reladdr & 0xffffffffffffull) == 0)
+			return do_pauth_reloc(reladdr, symval + addend);
+		return 1;
+	}
 	// We don't process auth relocs until we load all dependencies
 	if (is_phase_2)
+		return 1;
+	// FIXME a horrible hack; we set error = error_impl in __dls3 manually
+	if (*reladdr == error_sym)
 		return 1;
 	switch(type)
 	{
