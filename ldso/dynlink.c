@@ -1542,7 +1542,11 @@ void __libc_exit_fini()
 				ptrauth_auth_function(
 					(void (*)(void))*--fn,
 					ptrauth_key_asia,
+#if __has_feature(ptrauth_init_fini_address_discrimination)
+					ptrauth_blend_discriminator(fn, __ptrauth_init_fini_discriminator))();
+#else
 					__ptrauth_init_fini_discriminator)();
+#endif
 			}
 #else
 			while (n--) FPTR_CAST(void (*)(void), (void*)*(--fn))();
@@ -1667,9 +1671,14 @@ static void do_init_fini(struct dso **queue)
 #if __has_feature(ptrauth_init_fini)
 			while (n--) {
 				ptrauth_auth_function(
-					(void (*)(void))*fn++,
+					(void (*)(void))*fn,
 					ptrauth_key_asia,
+#if __has_feature(ptrauth_init_fini_address_discrimination)
+					ptrauth_blend_discriminator(fn, __ptrauth_init_fini_discriminator))();
+#else
 					__ptrauth_init_fini_discriminator)();
+#endif
+				++fn;
 			}
 #else
 			while (n--) FPTR_CAST(void (*)(void), (void*)*fn++)();
