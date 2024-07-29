@@ -564,6 +564,13 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 			reloc_addr[0] = reloc_addr[1];
 			reloc_addr[1] = tmp;
 #endif
+#if __has_feature(ptrauth_elf_got)
+			/* FIXME: actually, signing scheme is written in-place, and we should read and use that.
+			 * However, the scheme is known (IA key + addr div for function and DA key + addr div for data).
+			 * So, we just hard-code that. */
+			reloc_addr[0] = (size_t)(__builtin_ptrauth_auth_and_resign((void*)(reloc_addr[0]), 0, 0, 0, (size_t)(reloc_addr)));
+			reloc_addr[1] = (size_t)(__builtin_ptrauth_sign_unauthenticated((void*)(reloc_addr[1]), 2, (size_t)(reloc_addr) + 8));
+#endif
 			break;
 		default:
 			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso, (uint64_t)error))

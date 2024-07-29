@@ -18,7 +18,13 @@
 #define REL_DTPMOD      R_AARCH64_TLS_DTPMOD64
 #define REL_DTPOFF      R_AARCH64_TLS_DTPREL64
 #define REL_TPOFF       R_AARCH64_TLS_TPREL64
+
+#if __has_feature(ptrauth_elf_got)
+#define R_AARCH64_AUTH_TLSDESC 0xe202
+#define REL_TLSDESC     R_AARCH64_AUTH_TLSDESC
+#else
 #define REL_TLSDESC     R_AARCH64_TLSDESC
+#endif
 
 #define CRTJMP(pc,sp) __asm__ __volatile__( \
 	"mov sp,%1 ; br %0" : : "r"(pc), "r"(sp) : "memory" )
