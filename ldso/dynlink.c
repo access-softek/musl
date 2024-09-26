@@ -533,6 +533,12 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 #endif
 		case REL_TLSDESC:
 			if (stride<3) addend = reloc_addr[1];
+#ifdef __aarch64__
+			if (sym && sym->st_info>>4 == STB_WEAK && sym->st_shndx == SHN_UNDEF) {
+				reloc_addr[0] = (size_t)__tlsdesc_undef_weak;
+				reloc_addr[1] = 0;
+			} else
+#endif
 			if (def.dso->tls_id > static_tls_cnt) {
 				struct td_index *new = malloc(sizeof *new);
 				if (!new) {

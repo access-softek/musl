@@ -55,3 +55,12 @@ __tlsdesc_dynamic:
 	add x0,x1,x2          // dtv[p->modidx] + p->off - tp
 	ldp x1,x2,[sp],#16
 	ret
+
+.global __tlsdesc_undef_weak
+.hidden __tlsdesc_undef_weak
+.type __tlsdesc_undef_weak,@function
+__tlsdesc_undef_weak:
+	mov x0, #0
+	mrs x8, TPIDR_EL0
+	sub x0, x0, x8
+	ret
