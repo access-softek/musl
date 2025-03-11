@@ -20,7 +20,7 @@
 #define REL_TPOFF       R_AARCH64_TLS_TPREL64
 
 #if __has_feature(ptrauth_elf_got)
-#define R_AARCH64_AUTH_TLSDESC 0xe202
+#define R_AARCH64_AUTH_TLSDESC 0x413
 #define REL_TLSDESC     R_AARCH64_AUTH_TLSDESC
 #else
 #define REL_TLSDESC     R_AARCH64_TLSDESC
