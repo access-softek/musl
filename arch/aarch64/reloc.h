@@ -30,12 +30,12 @@
 	"mov sp,%1 ; br %0" : : "r"(pc), "r"(sp) : "memory" )
 
 #if __has_feature(ptrauth_calls)
-#define TARGET_RELOCATE(dso, type, reladdr, sym, addend, is_phase_2, error_sym) \
-  do_target_reloc(dso, type, reladdr, sym, addend, is_phase_2, error_sym)
+#define TARGET_RELOCATE(dso, type, reladdr, sym, addend, is_phase_2, dyn, error_sym) \
+  do_target_reloc(dso, type, reladdr, sym, addend, is_phase_2, dyn, error_sym)
 #define DO_TARGET_RELR(dso, dyn) do_pauth_relr(dso, dyn)
 
 int do_target_reloc(int type, uint64_t* reladdr, uint64_t base, uint64_t symval,
-                    uint64_t addend, int is_phase_2, uint64_t error_sym);
+                    uint64_t addend, int is_phase_2, uint64_t* dyn, uint64_t error_sym);
 
 void do_pauth_relr(uint64_t base, uint64_t* dyn);
 

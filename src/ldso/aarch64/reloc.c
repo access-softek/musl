@@ -69,10 +69,23 @@ static int do_pauth_reloc(uint64_t* reladdr, uint64_t value)
 	return 1;
 }
 
-int do_target_reloc(int type, uint64_t* reladdr, uint64_t base,
-                    uint64_t symval, uint64_t addend, int is_phase_2, uint64_t error_sym)
+static int has_dyn_tag(uint64_t* dyn, uint64_t tag)
 {
-	if (type == R_AARCH64_JUMP_SLOT) {
+	while(*dyn)
+	{
+		if (*dyn == tag)
+			return 1;
+		else
+			dyn += 2;
+	}
+	return 0;
+}
+
+int do_target_reloc(int type, uint64_t* reladdr, uint64_t base,
+                    uint64_t symval, uint64_t addend, int is_phase_2,
+                    uint64_t* dyn, uint64_t error_sym)
+{
+	if (type == R_AARCH64_JUMP_SLOT && has_dyn_tag(dyn, DT_AARCH64_PAC_PLT)) {
 		*reladdr = do_sign_ia((uint64_t)reladdr, *reladdr);
 		return 1;
 	}
