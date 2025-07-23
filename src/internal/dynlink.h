@@ -111,7 +111,7 @@ hidden void __dl_seterr(const char *, ...);
 hidden int __dl_invalid_handle(void *);
 hidden void __dl_vseterr(const char *, va_list);
 
-hidden ptrdiff_t __tlsdesc_static(), __tlsdesc_dynamic();
+hidden ptrdiff_t __tlsdesc_static(), __tlsdesc_dynamic(), __tlsdesc_undef_weak();
 
 hidden extern int __malloc_replaced;
 hidden extern int __aligned_alloc_replaced;

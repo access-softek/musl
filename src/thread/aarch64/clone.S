@@ -4,6 +4,10 @@
 // syscall(SYS_clone, flags, stack, ptid, tls, ctid)
 //         x8,        x0,    x1,    x2,   x3,  x4
 
+#ifndef __has_feature
+#define __has_feature(x) 0
+#endif
+
 .global __clone
 .hidden __clone
 .type   __clone,%function
@@ -25,6 +29,10 @@ __clone:
 	ret
 	// child
 1:	ldp x1,x0,[sp],#16
+#if __has_feature(ptrauth_calls) // TODO
+	blraaz x1
+#else
 	blr x1
+#endif
 	mov x8,#93 // SYS_exit
 	svc #0

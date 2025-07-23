@@ -6,6 +6,13 @@
 #include "libc.h"
 #include "syscall.h"
 
+/* With PAuth enabled, AArch64 has different FPTR_CAST macro definition. */
+#include "reloc.h"
+
+#ifndef FPTR_CAST
+#define FPTR_CAST(fty, p) ((fty)(p))
+#endif
+
 #ifdef VDSO_USEFUL
 
 #if ULONG_MAX == 0xffffffff
@@ -84,7 +91,9 @@ void *__vdsosym(const char *vername, const char *name)
 		if (strcmp(name, strings+syms[i].st_name)) continue;
 		if (versym && !checkver(verdef, versym[i], vername, strings))
 			continue;
-		return (void *)(base + syms[i].st_value);
+		return (syms[i].st_info & 0xF) == STT_FUNC ?
+				FPTR_CAST(void*, base + syms[i].st_value) :
+				(void *)(base + syms[i].st_value);
 	}
 
 	return 0;
