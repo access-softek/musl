@@ -1,5 +1,6 @@
 #define _GNU_SOURCE
 #define SYSCALL_NO_TLS 1
+#include <inttypes.h>
 #include <stdlib.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -19,6 +20,9 @@
 #include <dlfcn.h>
 #include <semaphore.h>
 #include <sys/membarrier.h>
+#if __has_feature(ptrauth_intrinsics)
+#include <ptrauth.h>
+#endif
 #include "pthread_impl.h"
 #include "fork_impl.h"
 #include "dynlink.h"
@@ -44,6 +48,18 @@ static void (*error)(const char *, ...) = error_noop;
 
 #define container_of(p,t,m) ((t*)((char *)(p)-offsetof(t,m)))
 #define countof(a) ((sizeof (a))/(sizeof (a)[0]))
+
+#ifndef TARGET_RELOCATE
+#define TARGET_RELOCATE(...) 0
+#endif
+
+#ifndef DO_TARGET_RELR
+#define DO_TARGET_RELR(...)
+#endif
+
+#ifndef FPTR_CAST
+#define FPTR_CAST(fty, p) ((fty)(p))
+#endif
 
 struct debug {
 	int ver;
@@ -111,6 +127,11 @@ struct dso {
 		size_t *got;
 	} *funcdescs;
 	size_t *got;
+#ifdef __aarch64__
+	/* PAuth core info as defined in PAUTHABIELF64:
+	 * https://github.com/ARM-software/abi-aa/blob/2025Q1/pauthabielf64/pauthabielf64.rst#core-information */
+	size_t* pauth;
+#endif
 	char buf[];
 };
 
@@ -471,6 +492,9 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 		case REL_GOT:
 		case REL_PLT:
 			*reloc_addr = sym_val + addend;
+			/* If AArch64 PAC is enabled and DT_AARCH64_PAC_PLT is present, sign the contents of R_AARCH64_JUMP_SLOT.
+			 * Otherwise, do nothing. */
+			TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso, dso->dynv, (uint64_t)error);
 			break;
 		case REL_USYMBOLIC:
 			memcpy(reloc_addr, &(size_t){sym_val + addend}, sizeof(size_t));
@@ -518,6 +542,15 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 #endif
 		case REL_TLSDESC:
 			if (stride<3) addend = reloc_addr[!TLSDESC_BACKWARDS];
+#ifdef __aarch64__
+			/* TODO: Submit implementation of undefined weak TLS symbols support to
+			 * mainline musl when it's implemented for other architectures.
+			 * The patch is work-in-progress. */
+			if (sym && sym->st_info>>4 == STB_WEAK && sym->st_shndx == SHN_UNDEF) {
+				reloc_addr[0] = (size_t)__tlsdesc_undef_weak;
+				reloc_addr[1] = 0;
+			} else
+#endif
 			if (def.dso->tls_id > static_tls_cnt) {
 				struct td_index *new = malloc(sizeof *new);
 				if (!new) {
@@ -533,7 +566,11 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 				reloc_addr[0] = (size_t)__tlsdesc_dynamic;
 				reloc_addr[1] = (size_t)new;
 			} else {
+#if __has_feature(ptrauth_intrinsics) && !__has_feature(ptrauth_elf_got)
+				reloc_addr[0] = (size_t)ptrauth_strip(&__tlsdesc_static, 0);
+#else
 				reloc_addr[0] = (size_t)__tlsdesc_static;
+#endif
 #ifdef TLS_ABOVE_TP
 				reloc_addr[1] = tls_val + def.dso->tls.offset
 					+ TPOFF_K + addend;
@@ -549,8 +586,18 @@ static void do_relocs(struct dso *dso, size_t *rel, size_t rel_size, size_t stri
 				reloc_addr[0] = reloc_addr[1];
 				reloc_addr[1] = tmp;
 			}
+#if __has_feature(ptrauth_elf_got)
+			/* FIXME: actually, signing scheme is written in-place in relocation slot, and we should read and use that.
+			 * However, the scheme is known (IA key + addr div for function and DA key + addr div for data).
+			 * So, we just hard-code that. See also:
+			 * https://github.com/ARM-software/abi-aa/blob/2025Q1/pauthabielf64/pauthabielf64.rst#default-signing-schema */
+			reloc_addr[0] = (size_t)(ptrauth_auth_and_resign((void*)(reloc_addr[0]), 0, 0, 0, (size_t)(reloc_addr)));
+			reloc_addr[1] = (size_t)(ptrauth_sign_unauthenticated((void*)(reloc_addr[1]), 2, (size_t)(reloc_addr) + 8));
+#endif
 			break;
 		default:
+			if (TARGET_RELOCATE(type, reloc_addr, (size_t)base, sym_val, addend, head == &ldso, dso->dynv, (uint64_t)error))
+				break;
 			error("Error relocating %s: unsupported relocation type %d",
 				dso->name, type);
 			if (runtime) longjmp(*rtld_fail, 1);
@@ -683,6 +730,84 @@ static void unmap_library(struct dso *dso)
 		munmap(dso->map, dso->map_len);
 	}
 }
+
+#ifdef __aarch64__
+
+/* See https://github.com/ARM-software/abi-aa/blob/2025Q1/pauthabielf64/pauthabielf64.rst#elf-marking */
+#define GNU_PROPERTY_AARCH64_FEATURE_PAUTH 0xc0000001
+
+static uint32_t align8(uint32_t val) {
+	if (val % 8 == 0)
+		return val;
+	return val + 8 - (val % 8);
+}
+
+static void get_pauth_core_info(struct dso *dso) {
+	for (int i = 0; i < dso->phnum; ++i) {
+		Phdr *ph = &dso->phdr[i];
+
+		/* Minimal GNU property section containing PAuth core info has 40 bytes size. */
+		if (!(ph->p_type == PT_NOTE && ph->p_memsz >= 40))
+			continue;
+
+		uint32_t *note = laddr(dso, ph->p_vaddr);
+		uint32_t *note_arr_end = (uint32_t*)((uintptr_t)note + ph->p_memsz);
+
+		for (; note != note_arr_end;
+		     /* We can hardcode 8-byte alignment since this code runs only on AArch64. */
+		     note = (uint32_t*)((uintptr_t)note + 4 + 4 + align8(4 + note[0]) + align8(note[1]))) {
+			/* Note segment is ill-formed: last note information entry exceeds the right segment boundary. */
+			if (note > note_arr_end) return;
+
+			if (!(note[0] == 4 && note[2] == NT_GNU_PROPERTY_TYPE_0 && strncmp((char*)&note[3], "GNU", 4) == 0))
+				continue;
+
+			uint32_t *prop = &note[4];
+			uint32_t *prop_arr_end = (uint32_t*)((uintptr_t)prop + note[1]);
+			for (; prop != prop_arr_end;
+			     /* We can hardcode 8-byte alignment since this code runs only on AArch64. */
+			     prop = (uint32_t*)((uintptr_t)prop + 4 + 4 + align8(prop[1]))) {
+				/* GNU property array is ill-formed: its last element end exceeds the right array boundary. */
+				if (prop > prop_arr_end) return;
+
+				if (prop[0] != GNU_PROPERTY_AARCH64_FEATURE_PAUTH) continue;
+
+				/* PAuth GNU property must have exactly 16 bytes length:
+				 * 8 bytes for platform and 8 bytes for version value. */
+				if (prop[1] != 16) return;
+
+				/* We do not expect multiple PAuth GNU properties. */
+				if (dso->pauth != 0) return;
+
+				dso->pauth = (size_t*)&prop[2];
+			}
+		}
+	}
+}
+
+static void print_pauth_core_info(size_t *pauth, const char *name) {
+	if (pauth == 0) {
+		dprintf(2, "%s: no PAuth core info\n", name);
+		return;
+	}
+	dprintf(2, "%s: (platform: 0x%" PRIx64 "; version: 0x%" PRIx64 ")\n", name, pauth[0], pauth[1]);
+}
+
+static int check_pauth_core_info_compatibility(size_t *pauth1, const char *name1, size_t *pauth2, const char *name2) {
+	if (pauth1 == pauth2)
+		return 1;
+
+	if (pauth1 == 0 || pauth2 == 0 || pauth1[0] != pauth2[0] || pauth1[1] != pauth2[1]) {
+		dprintf(2, "incompatible PAuth core info between %s and %s\n", name1, name2);
+		print_pauth_core_info(pauth1, name1);
+		print_pauth_core_info(pauth2, name2);
+		return 0;
+	}
+
+	return 1;
+}
+
+#endif
 
 static void *map_library(int fd, struct dso *dso)
 {
@@ -860,6 +985,9 @@ done_mapping:
 	dso->base = base;
 	dso->dynv = laddr(dso, dyn);
 	if (dso->tls.size) dso->tls.image = laddr(dso, tls_image);
+#ifdef __aarch64__
+	get_pauth_core_info(dso);
+#endif
 	free(allocated_buf);
 	return map;
 noexec:
@@ -1184,6 +1312,11 @@ static struct dso *load_library(const char *name, struct dso *needed_by)
 	close(fd);
 	if (!map) return 0;
 
+#ifdef __aarch64__
+	if (!check_pauth_core_info_compatibility(head->pauth, head->name, temp_dso.pauth, name))
+		return 0;
+#endif
+
 	/* Avoid the danger of getting two versions of libc mapped into the
 	 * same process when an absolute pathname was used. The symbols
 	 * checked are chosen to catch both musl and glibc, and to avoid
@@ -1421,6 +1554,9 @@ static void reloc_all(struct dso *p)
 		do_relocs(p, laddr(p, dyn[DT_RELA]), dyn[DT_RELASZ], 3);
 		if (!DL_FDPIC)
 			do_relr_relocs(p, laddr(p, dyn[DT_RELR]), dyn[DT_RELRSZ]);
+		if (p != &ldso) {
+			DO_TARGET_RELR((uint64_t)p->base, p->dynv);
+		}
 
 		if (head != &ldso && p->relro_start != p->relro_end) {
 			long ret = __syscall(SYS_mprotect, laddr(p, p->relro_start),
@@ -1464,6 +1600,9 @@ static void kernel_mapped_dso(struct dso *p)
 	p->map = p->base + min_addr;
 	p->map_len = max_addr - min_addr;
 	p->kernel_mapped = 1;
+#ifdef __aarch64__
+	get_pauth_core_info(p);
+#endif
 }
 
 void __libc_exit_fini()
@@ -1487,7 +1626,20 @@ void __libc_exit_fini()
 		if (dyn[0] & (1<<DT_FINI_ARRAY)) {
 			size_t n = dyn[DT_FINI_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = (size_t *)laddr(p, dyn[DT_FINI_ARRAY])+n;
-			while (n--) ((void (*)(void))*--fn)();
+#if __has_feature(ptrauth_init_fini)
+			while (n--) {
+				ptrauth_auth_function(
+					(void (*)(void))*--fn,
+					ptrauth_key_asia,
+#if __has_feature(ptrauth_init_fini_address_discrimination)
+					ptrauth_blend_discriminator(fn, __ptrauth_init_fini_discriminator))();
+#else
+					__ptrauth_init_fini_discriminator)();
+#endif
+			}
+#else
+			while (n--) FPTR_CAST(void (*)(void), (void*)*(--fn))();
+#endif
 		}
 #ifndef NO_LEGACY_INITFINI
 		if ((dyn[0] & (1<<DT_FINI)) && dyn[DT_FINI])
@@ -1605,7 +1757,21 @@ static void do_init_fini(struct dso **queue)
 		if (dyn[0] & (1<<DT_INIT_ARRAY)) {
 			size_t n = dyn[DT_INIT_ARRAYSZ]/sizeof(size_t);
 			size_t *fn = laddr(p, dyn[DT_INIT_ARRAY]);
-			while (n--) ((void (*)(void))*fn++)();
+#if __has_feature(ptrauth_init_fini)
+			while (n--) {
+				ptrauth_auth_function(
+					(void (*)(void))*fn,
+					ptrauth_key_asia,
+#if __has_feature(ptrauth_init_fini_address_discrimination)
+					ptrauth_blend_discriminator(fn, __ptrauth_init_fini_discriminator))();
+#else
+					__ptrauth_init_fini_discriminator)();
+#endif
+				++fn;
+			}
+#else
+			while (n--) FPTR_CAST(void (*)(void), (void*)*fn++)();
+#endif
 		}
 
 		pthread_mutex_lock(&init_fini_lock);
@@ -1727,7 +1893,16 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	} else {
 		ldso.base = base;
 	}
+#if __has_feature(ptrauth_elf_got)
+	/* TODO: support non-null __ehdr_start. Since at this point relocations
+	 * are not resolved yet, the contents of the GOT slot contains signing schema
+	 * so the value is treated as non-null even when it is actually null.
+	 * For undefined weak symbols with non-null values, implicit authentication
+	 * sequence is emitted on access attempt, and this authentication obviously fails. */
+	Ehdr *ehdr = (void *)ldso.base;
+#else
 	Ehdr *ehdr = __ehdr_start ? (void *)__ehdr_start : (void *)ldso.base;
+#endif
 	ldso.name = ldso.shortname = "libc.so";
 	ldso.phnum = ehdr->e_phnum;
 	ldso.phdr = laddr(&ldso, ehdr->e_phoff);
@@ -1764,7 +1939,7 @@ hidden void __dls2(unsigned char *base, size_t *sp)
 	 * load across the above relocation processing. */
 	struct symdef dls2b_def = find_sym(&ldso, "__dls2b", 0);
 	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls2b_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
+	else FPTR_CAST(stage3_func, laddr(&ldso, dls2b_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 2b sets up a valid thread pointer, which requires relocations
@@ -1788,7 +1963,7 @@ void __dls2b(size_t *sp, size_t *auxv)
 
 	struct symdef dls3_def = find_sym(&ldso, "__dls3", 0);
 	if (DL_FDPIC) ((stage3_func)&ldso.funcdescs[dls3_def.sym-ldso.syms])(sp, auxv);
-	else ((stage3_func)laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
+	else FPTR_CAST(stage3_func, laddr(&ldso, dls3_def.sym->st_value))(sp, auxv);
 }
 
 /* Stage 3 of the dynamic linker is called with the dynamic linker/libc

@@ -48,6 +48,11 @@ int __libc_sigaction(int sig, const struct sigaction *restrict sa, struct sigact
 #ifdef SA_RESTORER
 		ksa.flags |= SA_RESTORER;
 		ksa.restorer = (sa->sa_flags & SA_SIGINFO) ? __restore_rt : __restore;
+#if __has_feature(ptrauth_calls)
+		/* When the restorer is called by kernel, the restorer pointer is expected to be unsigned.
+		 * It was previously implicitly signed, so strip the signature manually. */
+		ksa.restorer = __builtin_ptrauth_strip(ksa.restorer, 0);
+#endif
 #endif
 		memcpy(&ksa.mask, &sa->sa_mask, _NSIG/8);
 	}

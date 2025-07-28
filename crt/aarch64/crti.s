@@ -2,6 +2,7 @@
 .global _init
 .type _init,%function
 _init:
+	paciasp
 	stp x29,x30,[sp,-16]!
 	mov x29,sp
 
@@ -9,5 +10,6 @@ _init:
 .global _fini
 .type _fini,%function
 _fini:
+	paciasp
 	stp x29,x30,[sp,-16]!
 	mov x29,sp
