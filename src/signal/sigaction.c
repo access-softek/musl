@@ -45,14 +45,26 @@ int __libc_sigaction(int sig, const struct sigaction *restrict sa, struct sigact
 		}
 		ksa.handler = sa->sa_handler;
 		ksa.flags = sa->sa_flags;
+#if __has_feature(ptrauth_function_pointer_type_discrimination)
+#error "Function pointer type discrimination is not yet supported."
+#endif
 #ifdef SA_RESTORER
 		ksa.flags |= SA_RESTORER;
 		ksa.restorer = (sa->sa_flags & SA_SIGINFO) ? __restore_rt : __restore;
 #if __has_feature(ptrauth_calls)
 		/* When the restorer is called by kernel, the restorer pointer is expected to be unsigned.
-		 * It was previously implicitly signed, so strip the signature manually. */
-		ksa.restorer = __builtin_ptrauth_strip(ksa.restorer, 0);
+		 * It was previously implicitly signed, so perform authentication. */
+		ksa.restorer = __builtin_ptrauth_auth(
+			ksa.restorer, /* ptrauth_key_asia */ 0,
+			/* discriminator */ 0);
 #endif
+#endif
+#if __has_feature(ptrauth_calls)
+		if (ksa.handler != SIG_DFL && ksa.handler != SIG_IGN) {
+			ksa.handler = __builtin_ptrauth_auth(
+				ksa.handler, /* ptrauth_key_asia */ 0,
+				/* discriminator */ 0);
+		}
 #endif
 		memcpy(&ksa.mask, &sa->sa_mask, _NSIG/8);
 	}
